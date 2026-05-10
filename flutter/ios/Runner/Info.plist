@@ -73,5 +73,7 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>실시간 SLAM 촬영을 위해 카메라 접근이 필요합니다.</string>
 </dict>
 </plist>
