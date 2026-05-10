@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/video_upload_provider.dart';
+import 'package:go_router/go_router.dart';
 
 class RecordingScreen extends ConsumerWidget {
   const RecordingScreen({super.key});
@@ -21,7 +22,13 @@ class RecordingScreen extends ConsumerWidget {
     });
 
     return Scaffold(
-      appBar: AppBar(title: const Text('영상 업로드')),
+      appBar: AppBar(
+        title: const Text('영상 업로드'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => context.go('/home'),
+        ),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(

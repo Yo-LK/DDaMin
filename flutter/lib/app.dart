@@ -10,10 +10,12 @@ import 'features/contributor/screens/recording_screen.dart';
 import 'features/navigator_mode/screens/map_download_screen.dart';
 import 'features/navigator_mode/screens/ar_navigation_screen.dart';
 import 'features/relocalization/screens/relocalization_screen.dart';
+import 'features/home/screens/home_screen.dart';
+import 'features/orb_slam/screens/orb_slam_screen.dart';
 
 final _routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
-    initialLocation: '/recording',
+    initialLocation: '/home',
     redirect: (context, state) => null,
     routes: [
       GoRoute(
@@ -50,6 +52,16 @@ final _routerProvider = Provider<GoRouter>((ref) {
         path: '/relocalization',
         name: 'relocalization',
         builder: (context, state) => const RelocalizationScreen(),
+      ),
+      GoRoute(
+        path: '/home',
+        name: 'home',
+        builder: (context, state) => const HomeScreen(),
+      ),
+      GoRoute(
+        path: '/orb-slam',
+        name: 'orbSlam',
+        builder: (context, state) => const OrbSlamScreen(),
       ),
     ],
   );
