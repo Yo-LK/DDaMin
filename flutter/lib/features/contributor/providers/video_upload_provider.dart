@@ -89,7 +89,6 @@ class VideoUploadNotifier extends StateNotifier<VideoUploadState> {
             totalBytes: total,
           );
         },
-        cancelToken: _cancelToken,
       );
       state = state.copyWith(status: VideoUploadStatus.done);
     } on DioException catch (e) {

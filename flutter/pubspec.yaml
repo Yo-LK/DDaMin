@@ -43,6 +43,7 @@ dependencies:
   # 네트워크
   dio: ^5.4.3
   connectivity_plus: ^6.0.3
+  http: ^1.2.1
 
   # 센서 / 위치
   geolocator: ^12.0.0
