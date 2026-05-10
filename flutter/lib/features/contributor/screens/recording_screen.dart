@@ -31,10 +31,21 @@ class RecordingScreen extends ConsumerWidget {
               state: uploadState,
               onPick: notifier.pickVideo,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            // 업로드 방식 선택
+            _UploadModeSelector(
+              mode: uploadState.uploadMode,
+              enabled: uploadState.status != VideoUploadStatus.uploading,
+              onChanged: notifier.setUploadMode,
+            ),
+
+            const SizedBox(height: 16),
+
             if (uploadState.status == VideoUploadStatus.uploading ||
                 uploadState.status == VideoUploadStatus.done)
               _UploadProgressCard(state: uploadState),
+
             const Spacer(),
             _ActionButtons(
               state: uploadState,
@@ -45,6 +56,48 @@ class RecordingScreen extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _UploadModeSelector extends StatelessWidget {
+  final UploadMode mode;
+  final bool enabled;
+  final void Function(UploadMode) onChanged;
+
+  const _UploadModeSelector({
+    required this.mode,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Text('전송 방식', style: TextStyle(fontSize: 14)),
+        const SizedBox(width: 16),
+        Expanded(
+          child: SegmentedButton<UploadMode>(
+            segments: const [
+              ButtonSegment(
+                value: UploadMode.single,
+                label: Text('통파일'),
+                icon: Icon(Icons.file_upload_outlined),
+              ),
+              ButtonSegment(
+                value: UploadMode.chunked,
+                label: Text('청크'),
+                icon: Icon(Icons.dataset_outlined),
+              ),
+            ],
+            selected: {mode},
+            onSelectionChanged: enabled
+                ? (selected) => onChanged(selected.first)
+                : null,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -62,7 +115,7 @@ class _FilePickerCard extends StatelessWidget {
     return GestureDetector(
       onTap: state.status == VideoUploadStatus.uploading ? null : onPick,
       child: Container(
-        height: 160,
+        height: 140,
         decoration: BoxDecoration(
           border: Border.all(
             color: hasFile
@@ -81,7 +134,7 @@ class _FilePickerCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.video_file,
-                        size: 48,
+                        size: 40,
                         color: Theme.of(context).colorScheme.primary),
                     const SizedBox(height: 8),
                     Text(
@@ -99,7 +152,7 @@ class _FilePickerCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(Icons.video_library_outlined,
-                        size: 48, color: Colors.grey.shade400),
+                        size: 40, color: Colors.grey.shade400),
                     const SizedBox(height: 8),
                     Text('갤러리에서 영상 선택',
                         style: TextStyle(color: Colors.grey.shade600)),

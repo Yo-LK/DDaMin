@@ -6,8 +6,11 @@ import '../../../data/remote/video_remote_datasource.dart';
 
 enum VideoUploadStatus { idle, picking, uploading, done, error }
 
+enum UploadMode { single, chunked }
+
 class VideoUploadState {
   final VideoUploadStatus status;
+  final UploadMode uploadMode;
   final String? filePath;
   final String? fileName;
   final int uploadedBytes;
@@ -16,6 +19,7 @@ class VideoUploadState {
 
   const VideoUploadState({
     this.status = VideoUploadStatus.idle,
+    this.uploadMode = UploadMode.chunked,
     this.filePath,
     this.fileName,
     this.uploadedBytes = 0,
@@ -27,6 +31,7 @@ class VideoUploadState {
 
   VideoUploadState copyWith({
     VideoUploadStatus? status,
+    UploadMode? uploadMode,
     String? filePath,
     String? fileName,
     int? uploadedBytes,
@@ -35,6 +40,7 @@ class VideoUploadState {
   }) {
     return VideoUploadState(
       status: status ?? this.status,
+      uploadMode: uploadMode ?? this.uploadMode,
       filePath: filePath ?? this.filePath,
       fileName: fileName ?? this.fileName,
       uploadedBytes: uploadedBytes ?? this.uploadedBytes,
@@ -50,7 +56,12 @@ class VideoUploadNotifier extends StateNotifier<VideoUploadState> {
 
   VideoUploadNotifier(this._datasource) : super(const VideoUploadState());
 
+  void setUploadMode(UploadMode mode) {
+    state = state.copyWith(uploadMode: mode);
+  }
+
   Future<void> pickVideo() async {
+    if (state.status == VideoUploadStatus.picking) return;
     state = state.copyWith(status: VideoUploadStatus.picking);
     final picker = ImagePicker();
     final video = await picker.pickVideo(source: ImageSource.gallery);
@@ -81,15 +92,23 @@ class VideoUploadNotifier extends StateNotifier<VideoUploadState> {
     );
 
     try {
-      await _datasource.uploadVideo(
-        filePath: filePath,
-        onProgress: (sent, total) {
-          state = state.copyWith(
-            uploadedBytes: sent,
-            totalBytes: total,
-          );
-        },
-      );
+      if (state.uploadMode == UploadMode.single) {
+        await _datasource.uploadVideoSingle(
+          filePath: filePath,
+          onProgress: (sent, total) {
+            state = state.copyWith(uploadedBytes: sent, totalBytes: total);
+          },
+          cancelToken: _cancelToken,
+        );
+      } else {
+        await _datasource.uploadVideoChunked(
+          filePath: filePath,
+          onProgress: (sent, total) {
+            state = state.copyWith(uploadedBytes: sent, totalBytes: total);
+          },
+          cancelToken: _cancelToken,
+        );
+      }
       state = state.copyWith(status: VideoUploadStatus.done);
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
