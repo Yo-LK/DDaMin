@@ -8,9 +8,9 @@ const int _chunkSize = 5 * 1024 * 1024; // 5MB
 
 class VideoRemoteDatasource {
   String get _baseUrl => dotenv.env['BASE_URL'] ?? '';
-  String get _uploadUrl => '$_baseUrl/api/video/upload';
+  String get _uploadUrl => '$_baseUrl/upload';
 
-  // 통파일 업로드
+  // 통파일 업로드 (chunk_index=0, total_chunks=1로 서버에 전송)
   Future<void> uploadVideoSingle({
     required String filePath,
     required void Function(int sent, int total) onProgress,
@@ -23,17 +23,19 @@ class VideoRemoteDatasource {
     print('요청 URL: $_uploadUrl (통파일)');
     print('파일 크기: ${(totalBytes / 1024 / 1024).toStringAsFixed(1)}MB');
 
-    final boundary = '----FlutterBoundary${DateTime.now().millisecondsSinceEpoch}';
+    final boundary =
+        '----FlutterBoundary${DateTime.now().millisecondsSinceEpoch}';
     final uri = Uri.parse(_uploadUrl);
     final httpClient = HttpClient()
       ..badCertificateCallback = (cert, host, port) => true;
 
     try {
       final request = await httpClient.postUrl(uri);
-      request.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
+      request.headers.set(
+          'Content-Type', 'multipart/form-data; boundary=$boundary');
       request.headers.set('ngrok-skip-browser-warning', 'true');
 
-      final header = [
+      final headerBytes = [
         '--$boundary\r\n',
         'Content-Disposition: form-data; name="chunk_index"\r\n\r\n',
         '0\r\n',
@@ -41,24 +43,20 @@ class VideoRemoteDatasource {
         'Content-Disposition: form-data; name="total_chunks"\r\n\r\n',
         '1\r\n',
         '--$boundary\r\n',
-        'Content-Disposition: form-data; name="file_name"\r\n\r\n',
+        'Content-Disposition: form-data; name="filename"\r\n\r\n',
         '$fileName\r\n',
-        '--$boundary\r\n',
-        'Content-Disposition: form-data; name="is_last"\r\n\r\n',
-        'true\r\n',
         '--$boundary\r\n',
         'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n',
         'Content-Type: application/octet-stream\r\n\r\n',
       ].join().codeUnits;
 
-      final footer = '\r\n--$boundary--\r\n'.codeUnits;
-      final contentLength = header.length + totalBytes + footer.length;
+      final footerBytes = '\r\n--$boundary--\r\n'.codeUnits;
+      final contentLength =
+          headerBytes.length + totalBytes + footerBytes.length;
+
       request.headers.contentLength = contentLength;
+      request.add(headerBytes);
 
-      // 헤더 전송
-      request.add(header);
-
-      // 파일 스트리밍 전송
       int sent = 0;
       await for (final chunk in file.openRead()) {
         if (cancelToken?.isCancelled == true) break;
@@ -67,13 +65,13 @@ class VideoRemoteDatasource {
         onProgress(sent, totalBytes);
       }
 
-      // 푸터 전송
-      request.add(footer);
+      request.add(footerBytes);
 
       final response = await request.close();
 
       if (response.statusCode != 200) {
-        final body = await response.transform(const SystemEncoding().decoder).join();
+        final body =
+            await response.transform(const SystemEncoding().decoder).join();
         print('업로드 실패: ${response.statusCode} $body');
         throw Exception('업로드 실패: ${response.statusCode}');
       }
@@ -112,15 +110,16 @@ class VideoRemoteDatasource {
         final remaining = totalBytes - offset;
         final currentChunkSize =
             remaining < _chunkSize ? remaining.toInt() : _chunkSize;
-        final isLast = (offset + currentChunkSize) >= totalBytes;
 
         final Uint8List buffer = await raf.read(currentChunkSize);
 
-        final boundary = '----FlutterBoundary${DateTime.now().millisecondsSinceEpoch}';
+        final boundary =
+            '----FlutterBoundary${DateTime.now().millisecondsSinceEpoch}';
         final uri = Uri.parse(_uploadUrl);
 
         final request = await httpClient.postUrl(uri);
-        request.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
+        request.headers.set(
+            'Content-Type', 'multipart/form-data; boundary=$boundary');
         request.headers.set('ngrok-skip-browser-warning', 'true');
 
         final body = _buildMultipartBody(
@@ -128,8 +127,7 @@ class VideoRemoteDatasource {
           fields: {
             'chunk_index': chunkIndex.toString(),
             'total_chunks': totalChunks.toString(),
-            'file_name': fileName,
-            'is_last': isLast.toString(),
+            'filename': fileName,
           },
           fileField: 'file',
           fileName: fileName,
@@ -142,12 +140,14 @@ class VideoRemoteDatasource {
         final response = await request.close();
 
         if (response.statusCode != 200) {
-          final respBody = await response.transform(const SystemEncoding().decoder).join();
+          final respBody =
+              await response.transform(const SystemEncoding().decoder).join();
           print('청크 $chunkIndex 실패: ${response.statusCode} $respBody');
           throw Exception('업로드 실패: ${response.statusCode}');
         }
 
         await response.drain<void>();
+        await Future.delayed(Duration.zero);
 
         offset += currentChunkSize;
         chunkIndex++;
@@ -171,13 +171,15 @@ class VideoRemoteDatasource {
     for (final entry in fields.entries) {
       parts.addAll('--$boundary\r\n'.codeUnits);
       parts.addAll(
-          'Content-Disposition: form-data; name="${entry.key}"\r\n\r\n'.codeUnits);
+          'Content-Disposition: form-data; name="${entry.key}"\r\n\r\n'
+              .codeUnits);
       parts.addAll('${entry.value}\r\n'.codeUnits);
     }
 
     parts.addAll('--$boundary\r\n'.codeUnits);
     parts.addAll(
-        'Content-Disposition: form-data; name="$fileField"; filename="$fileName"\r\n'.codeUnits);
+        'Content-Disposition: form-data; name="$fileField"; filename="$fileName"\r\n'
+            .codeUnits);
     parts.addAll('Content-Type: application/octet-stream\r\n\r\n'.codeUnits);
     parts.addAll(fileBytes);
     parts.addAll('\r\n'.codeUnits);
