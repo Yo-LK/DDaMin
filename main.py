@@ -1,6 +1,9 @@
 import os
 import subprocess
 import time
+import csv
+import struct
+import uuid
 from fastapi import FastAPI, UploadFile, Form, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,38 +81,61 @@ async def upload_chunk(
 SLAM_SAVE_DIR = "/app/slam_images"
 os.makedirs(SLAM_SAVE_DIR, exist_ok=True)
 
+_IMU_ENTRY_FMT  = '<d3f3f'
+_IMU_ENTRY_SIZE = struct.calcsize(_IMU_ENTRY_FMT)  # 32 bytes
+
 @app.websocket("/ws/orb-slam")
 async def websocket_orb_slam(websocket: WebSocket):
     await websocket.accept()
     print("[System] WebSocket 연결 수락: /ws/orb-slam")
 
+    session_id   = str(uuid.uuid4())
+    imu_csv_path = os.path.join(SLAM_SAVE_DIR, f"imu_{session_id}.csv")
+
+    with open(imu_csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["frame_number", "timestamp_ms", "ax", "ay", "az", "gx", "gy", "gz"])
+
     try:
-        frame_count = 0
         while True:
             message = await websocket.receive()
-            data = None
 
-            if "bytes" in message:
-                data = message["bytes"]
-            elif "text" in message:
-                data = message["text"].encode()
-            elif message.get("type") == "websocket.disconnect":
+            if message.get("type") == "websocket.disconnect":
                 break
-            else:
+
+            data = message.get("bytes") or (message.get("text", "").encode() if "text" in message else None)
+            if not data or len(data) < 6:
+                print(f"[WS] 데이터 없음 또는 너무 짧음: {len(data) if data else 0}")
                 continue
 
-            if data:
-                # --- [저장 로직 추가] ---
-                frame_count += 1
-                # 파일명 예시: frame_1715400000_1.jpg
-                file_name = f"frame_{int(time.time())}_{frame_count}.jpg"
-                save_path = os.path.join(SLAM_SAVE_DIR, file_name)
-               
-                with open(save_path, "wb") as f:
-                    f.write(data)
-                # -----------------------
+            # 패킷 파싱: [4B frame_number][2B imu_count][N×32B IMU][JPEG]
+            frame_number = struct.unpack_from('<I', data, 0)[0]
+            imu_count    = struct.unpack_from('<H', data, 4)[0]
+            imu_end      = 6 + imu_count * _IMU_ENTRY_SIZE
 
-                await websocket.send_text(f"Saved: {file_name}")
+            print(f"[WS] frame={frame_number}, imu_count={imu_count}, imu_end={imu_end}, total={len(data)}")
+
+            if len(data) < imu_end:
+                continue
+
+            # IMU 파싱 및 CSV 저장
+            rows = []
+            for i in range(imu_count):
+                offset = 6 + i * _IMU_ENTRY_SIZE
+                ts, ax, ay, az, gx, gy, gz = struct.unpack_from(_IMU_ENTRY_FMT, data, offset)
+                rows.append([frame_number, ts, ax, ay, az, gx, gy, gz])
+
+            with open(imu_csv_path, 'a', newline='') as f:
+                csv.writer(f).writerows(rows)
+
+            # JPEG 저장
+            jpeg = data[imu_end:]
+            file_name = f"frame_{int(time.time())}_{frame_number}.jpg"
+            save_path = os.path.join(SLAM_SAVE_DIR, file_name)
+            with open(save_path, "wb") as f:
+                f.write(jpeg)
+
+            await websocket.send_text(f"Saved: {file_name}")
 
     except WebSocketDisconnect:
         print("[System] WebSocket 연결 해제됨")
