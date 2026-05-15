@@ -2,13 +2,33 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:image/image.dart' as img;
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+
+class _ImuSample {
+  final double timestampMs;
+  final double ax, ay, az;
+  final double gx, gy, gz;
+
+  _ImuSample({
+    required this.timestampMs,
+    required this.ax, required this.ay, required this.az,
+    required this.gx, required this.gy, required this.gz,
+  });
+}
 
 class OrbSlamService {
   WebSocketChannel? _channel;
   bool _isStreaming = false;
   DateTime? _lastFrameTime;
-  static const int _frameIntervalMs = 100; // 10fps
+  static const int _frameIntervalMs = 100;
+
+  int _frameNumber = 0;
+
+  final List<_ImuSample> _imuBuffer = [];
+  double _gx = 0, _gy = 0, _gz = 0;
+  StreamSubscription? _accelSub;
+  StreamSubscription? _gyroSub;
 
   Stream<dynamic>? get resultStream => _channel?.stream;
 
@@ -17,15 +37,44 @@ class OrbSlamService {
     await _channel!.ready;
   }
 
+  void _startImu() {
+    _gyroSub = gyroscopeEventStream(samplingPeriod: const Duration(milliseconds: 20),).listen(
+      (e) {
+        _gx = e.x; _gy = e.y; _gz = e.z;
+      },
+      onError: (e) => print('[IMU] gyro error: $e'),
+    );
+    _accelSub = accelerometerEventStream(samplingPeriod: const Duration(milliseconds: 20),).listen(
+      (e) {
+        _imuBuffer.add(_ImuSample(
+          timestampMs: DateTime.now().millisecondsSinceEpoch.toDouble(),
+          ax: e.x, ay: e.y, az: e.z,
+          gx: _gx, gy: _gy, gz: _gz,
+        ));
+      },
+      onError: (e) => print('[IMU] accel error: $e'),
+    );
+  }
+
+  void _stopImu() {
+    _accelSub?.cancel();
+    _gyroSub?.cancel();
+    _accelSub = null;
+    _gyroSub = null;
+    _imuBuffer.clear();
+  }
+
   void startStreaming(CameraController controller) {
     if (_isStreaming) return;
     _isStreaming = true;
+    _startImu();
     controller.startImageStream(_onFrame);
   }
 
   void stopStreaming(CameraController controller) {
     if (!_isStreaming) return;
     _isStreaming = false;
+    _stopImu();
     if (controller.value.isStreamingImages) {
       controller.stopImageStream();
     }
@@ -41,8 +90,44 @@ class OrbSlamService {
 
     final jpeg = _convertToJpeg(image);
     if (jpeg != null) {
-      _channel?.sink.add(jpeg);
+      final payload = _buildPayload(jpeg: jpeg);
+      _channel?.sink.add(payload);
     }
+  }
+
+  /// 패킷 구조:
+  /// [2B: IMU 개수 N (uint16)]
+  /// [N × 32B: IMU 엔트리 (float64 ts, float32 ax,ay,az, float32 gx,gy,gz)]
+  /// [나머지: JPEG bytes]
+  // _buildPayload 교체
+/// [4B: frame_number (uint32)][2B: IMU count N][N × 32B IMU entries][JPEG]
+  Uint8List _buildPayload({required Uint8List jpeg}) {
+    print('[Frame] frameNumber=$_frameNumber, imuBufferSize=${_imuBuffer.length}');
+    final samples = List<_ImuSample>.from(_imuBuffer);
+    _imuBuffer.clear();
+
+    final imuCount  = samples.length;
+    final headerSize = 4 + 2 + imuCount * 32;
+    final result    = Uint8List(headerSize + jpeg.length);
+    final bd        = ByteData.view(result.buffer);
+
+    bd.setUint32(0, _frameNumber, Endian.little);
+    bd.setUint16(4, imuCount,     Endian.little);
+
+    int offset = 6;
+    for (final s in samples) {
+      bd.setFloat64(offset, s.timestampMs, Endian.little); offset += 8;
+      bd.setFloat32(offset, s.ax,          Endian.little); offset += 4;
+      bd.setFloat32(offset, s.ay,          Endian.little); offset += 4;
+      bd.setFloat32(offset, s.az,          Endian.little); offset += 4;
+      bd.setFloat32(offset, s.gx,          Endian.little); offset += 4;
+      bd.setFloat32(offset, s.gy,          Endian.little); offset += 4;
+      bd.setFloat32(offset, s.gz,          Endian.little); offset += 4;
+    }
+
+    result.setRange(headerSize, result.length, jpeg);
+    _frameNumber++;
+    return result;
   }
 
   Uint8List? _convertToJpeg(CameraImage cameraImage) {
@@ -64,6 +149,7 @@ class OrbSlamService {
 
   Future<void> disconnect() async {
     _isStreaming = false;
+    _stopImu();
     await _channel?.sink.close();
     _channel = null;
   }
