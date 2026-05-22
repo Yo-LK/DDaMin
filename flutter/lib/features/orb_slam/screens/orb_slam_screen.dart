@@ -34,7 +34,7 @@ class _OrbSlamScreenState extends ConsumerState<OrbSlamScreen> {
       }
       _controller = CameraController(
         cameras.first,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
       );
       await _controller!.initialize();

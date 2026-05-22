@@ -1,0 +1,128 @@
+#include <iostream>
+#include <chrono>
+#include <vector>
+#include <cstring>
+#include <unistd.h>
+#include <fcntl.h>
+#include <csignal>
+
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+
+#include <System.h>
+
+#define FIFO_PATH "/tmp/slam_pipe"
+
+static ORB_SLAM3::System* g_SLAM = nullptr;
+static bool read_exact(int fd, uint8_t* buf, size_t n) {
+    size_t total = 0;
+    while (total < n) {
+        ssize_t r = read(fd, buf + total, n - total);
+        if (r <= 0) return false;
+        total += r;
+    }
+    return true;
+}
+
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "Usage: ./mono_inertial_fifo <vocabulary> <settings_yaml>" << std::endl;
+        return 1;
+    }
+
+    system("mkdir -p /app/slam_output");
+
+    // 테스트: 순수 Monocular
+    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, false);
+
+    g_SLAM = &SLAM;
+    signal(SIGINT, [](int) {
+        if (g_SLAM) {
+            g_SLAM->SaveKeyFrameTrajectoryTUM("/app/slam_output/KeyFrameTrajectory.txt");
+            g_SLAM->SaveMapPoints("/app/slam_output/MapPoints.txt");
+            g_SLAM->Shutdown();
+        }
+        exit(0);
+    });
+    // IMU 사용 시 아래로 교체:
+    // ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::IMU_MONOCULAR, false);
+
+    while (true) {
+        std::cout << "[SLAM] FIFO 대기 중..." << std::endl;
+        int fd = open(FIFO_PATH, O_RDONLY);
+        if (fd < 0) {
+            std::cerr << "[SLAM] FIFO open 실패" << std::endl;
+            sleep(1);
+            continue;
+        }
+        {
+            int flags = fcntl(fd, F_GETFL);
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK); uint8_t drain_buf[4096];
+            while (read(fd,drain_buf, sizeof(drain_buf)) > 0);
+            fcntl(fd, F_SETFL, flags); // blocking 복원
+            std::cout << "[SLAM] 잔류 버퍼 제거 완료" << std::endl;
+        }
+        std::cout << "[SLAM] FIFO 연결됨, 프레임 수신 대기 중..." << std::endl;
+
+        while (true) {
+            uint32_t jpeg_size = 0;
+            uint16_t imu_count = 0;
+
+            if (!read_exact(fd, (uint8_t*)&jpeg_size, 4)) break;
+            if (!read_exact(fd, (uint8_t*)&imu_count,  2)) break;
+
+            // IMU 파싱 (MONOCULAR 테스트 중에도 데이터는 읽어서 버퍼 소진)
+            std::vector<ORB_SLAM3::IMU::Point> imu_points;
+            for (int i = 0; i < imu_count; i++) {
+                uint8_t entry[32];
+                if (!read_exact(fd, entry, 32)) goto next_session;
+
+                double ts_ms;
+                float ax, ay, az, gx, gy, gz;
+                memcpy(&ts_ms, entry,      8);
+                memcpy(&ax,    entry +  8, 4);
+                memcpy(&ay,    entry + 12, 4);
+                memcpy(&az,    entry + 16, 4);
+                memcpy(&gx,    entry + 20, 4);
+                memcpy(&gy,    entry + 24, 4);
+                memcpy(&gz,    entry + 28, 4);
+                imu_points.emplace_back(ax, ay, az, gx, gy, gz, ts_ms / 1000.0);
+            }
+
+            {
+                // JPEG 수신
+                std::vector<uint8_t> jpeg_buf(jpeg_size);
+                if (!read_exact(fd, jpeg_buf.data(), jpeg_size)) break;
+
+                // JPEG 디코딩
+                cv::Mat img = cv::imdecode(jpeg_buf, cv::IMREAD_GRAYSCALE);
+                if (img.empty()) {
+                    std::cerr << "[SLAM] JPEG 디코딩 실패, 스킵" << std::endl;
+                    continue;
+                }
+
+                double timestamp = imu_points.empty()
+                    ? static_cast<double>(
+                          std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch()).count()) / 1000.0
+                    : imu_points.back().t;
+
+                // 순수 Monocular
+                SLAM.TrackMonocular(img, timestamp);
+                // IMU 사용 시 아래로 교체:
+                // SLAM.TrackMonocular(img, timestamp, imu_points);
+            }
+            continue;
+
+next_session:
+            break;
+        }
+
+        std::cout << "[SLAM] FIFO 연결 해제, 재연결 대기..." << std::endl;
+        close(fd);
+        SLAM.SaveKeyFrameTrajectoryTUM("/app/slam_output/KeyFrameTrajectory.txt");
+    }
+
+    SLAM.Shutdown();
+    return 0;
+}

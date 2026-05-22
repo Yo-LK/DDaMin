@@ -4,11 +4,46 @@ import time
 import csv
 import struct
 import uuid
+import fcntl
+import asyncio
+import errno
+import concurrent.futures
 from fastapi import FastAPI, UploadFile, Form, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+_fifo_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+_fifo_write_future = None
+
+
+def _write_nonblocking_or_drop(fd, data):
+    try:
+        os.write(fd, data)  # PIPE_BUF(64KB) 이하면 원자적
+    except OSError as e:
+        if e.errno == errno.EAGAIN:
+            print("[FIFO] 버퍼 꽉참, 프레임 드롭")
+        else:
+            raise
+
+
 app = FastAPI()
+
+_fifo_fd = -1
+
+@app.on_event("startup")
+async def open_fifo():
+    global _fifo_fd
+    try:
+        _fifo_fd = os.open(FIFO_PATH, os.O_WRONLY | os.O_NONBLOCK)
+        print("[SLAM] FIFO 연결됨 (startup)")
+    except OSError:
+        _fifo_fd = -1
+        print("[SLAM] FIFO 연결 실패")
+
+
+FIFO_PATH = '/tmp/slam_pipe'
+if not os.path.exists(FIFO_PATH):
+    os.mkfifo(FIFO_PATH)
 
 # --- [INSERT 1] CORS 미들웨어 설정 ---
 app.add_middleware(
@@ -89,6 +124,9 @@ async def websocket_orb_slam(websocket: WebSocket):
     await websocket.accept()
     print("[System] WebSocket 연결 수락: /ws/orb-slam")
 
+    global _fifo_fd
+    fifo_fd = _fifo_fd
+
     session_id   = str(uuid.uuid4())
     imu_csv_path = os.path.join(SLAM_SAVE_DIR, f"imu_{session_id}.csv")
 
@@ -135,7 +173,20 @@ async def websocket_orb_slam(websocket: WebSocket):
             with open(save_path, "wb") as f:
                 f.write(jpeg)
 
+            global _fifo_write_future
+            
+            if _fifo_fd >= 0:
+                fifo_payload = struct.pack('<IH', len(jpeg), imu_count) + data[6:imu_end] + jpeg
+                if _fifo_write_future is None or _fifo_write_future.done():
+                    _fifo_write_future = asyncio.get_event_loop().run_in_executor(
+                        _fifo_executor, _write_nonblocking_or_drop, _fifo_fd, fifo_payload
+                    )
+                else:
+                    print("[FIFO] 이전 쓰기 중, 프레임 스킵")
+
             await websocket.send_text(f"Saved: {file_name}")
 
     except WebSocketDisconnect:
         print("[System] WebSocket 연결 해제됨")
+    finally:
+        pass
