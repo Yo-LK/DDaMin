@@ -36,6 +36,7 @@ class _OrbSlamScreenState extends ConsumerState<OrbSlamScreen> {
         cameras.first,
         ResolutionPreset.medium,
         enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.bgra8888,
       );
       await _controller!.initialize();
       if (mounted) setState(() => _isInitialized = true);

@@ -132,17 +132,47 @@ class OrbSlamService {
 
   Uint8List? _convertToJpeg(CameraImage cameraImage) {
     try {
-      final plane = cameraImage.planes[0];
+      final plane  = cameraImage.planes[0];
+      final width  = cameraImage.width;
+      final height = cameraImage.height;
+      final bytesPerRow = plane.bytesPerRow;
+      // print('[CAM] planes=${cameraImage.planes.length}, w=$width, h=$height, bytesPerRow=$bytesPerRow, expected=${width * 4}');
+
+      Uint8List bytes;
+      if (bytesPerRow == width * 4) {
+        bytes = plane.bytes;
+      } else {
+        bytes = Uint8List(width * height * 4);
+        for (int i = 0; i < height; i++) {
+          bytes.setRange(
+            i * width * 4,
+            (i + 1) * width * 4,
+            plane.bytes,
+            i * bytesPerRow,
+          );
+        }
+      }
+
+      // BGRA → RGBA 명시적 채널 스왑
+      final rgbaBytes = Uint8List(width * height * 4);
+      for (int i = 0; i < width * height; i++) {
+        rgbaBytes[i * 4 + 0] = bytes[i * 4 + 2]; // R
+        rgbaBytes[i * 4 + 1] = bytes[i * 4 + 1]; // G
+        rgbaBytes[i * 4 + 2] = bytes[i * 4 + 0]; // B
+        rgbaBytes[i * 4 + 3] = bytes[i * 4 + 3]; // A
+      }
+
       final imgFrame = img.Image.fromBytes(
-        width: cameraImage.width,
-        height: cameraImage.height,
-        bytes: plane.bytes.buffer,
+        width: width,
+        height: height,
+        bytes: rgbaBytes.buffer,
         format: img.Format.uint8,
         numChannels: 4,
-        order: img.ChannelOrder.bgra,
+        order: img.ChannelOrder.rgba,
       );
       return img.encodeJpg(imgFrame, quality: 70);
-    } catch (_) {
+    } catch (e, st) {
+      print('[CAM] convert error: $e\n$st');
       return null;
     }
   }
