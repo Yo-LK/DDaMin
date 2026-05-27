@@ -42,7 +42,7 @@ fig = plt.figure(figsize=(16, 7))
 
 # ── 3D 포인트 클라우드 ────────────────────────────────
 ax1 = fig.add_subplot(121, projection='3d')
-ax1.scatter(x, z, y, c=colors, cmap='viridis', s=1, alpha=0.6)
+ax1.scatter(-x, z, y, c=colors, cmap='viridis', s=1, alpha=0.6)
 
 # 카메라 궤적 오버레이
 if os.path.exists(TRAJ_FILE):
@@ -62,7 +62,7 @@ ax1.set_title(f'3D 포인트 클라우드 ({len(x)}개)')
 
 # ── 탑뷰 (XZ) ────────────────────────────────────────
 ax2 = fig.add_subplot(122)
-ax2.scatter(x, z, c=colors, cmap='viridis', s=1, alpha=0.5)
+ax2.scatter(-x, z, c=colors, cmap='viridis', s=1, alpha=0.5)
 
 if os.path.exists(TRAJ_FILE):
     ax2.plot(tx, tz, 'r-', linewidth=1.5, alpha=0.8, label='카메라 궤적')
