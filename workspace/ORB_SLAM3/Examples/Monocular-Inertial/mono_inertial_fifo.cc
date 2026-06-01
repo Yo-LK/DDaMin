@@ -33,8 +33,10 @@ int main(int argc, char** argv) {
     system("mkdir -p /app/slam_output");
 
     // 테스트: 순수 Monocular
-    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, false);
-
+    // ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, true);
+    // IMU 사용 시 아래로 교체:
+    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::IMU_MONOCULAR, true);
+   
     g_SLAM = &SLAM;
     signal(SIGINT, [](int) {
         if (g_SLAM) {
@@ -44,8 +46,6 @@ int main(int argc, char** argv) {
         }
         exit(0);
     });
-    // IMU 사용 시 아래로 교체:
-    // ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::IMU_MONOCULAR, false);
 
     while (true) {
         std::cout << "[SLAM] FIFO 대기 중..." << std::endl;
@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
             sleep(1);
             continue;
         }
+     
         {
             int flags = fcntl(fd, F_GETFL);
             fcntl(fd, F_SETFL, flags | O_NONBLOCK); uint8_t drain_buf[4096];
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
             fcntl(fd, F_SETFL, flags); // blocking 복원
             std::cout << "[SLAM] 잔류 버퍼 제거 완료" << std::endl;
         }
+ 
         std::cout << "[SLAM] FIFO 연결됨, 프레임 수신 대기 중..." << std::endl;
 
         while (true) {
@@ -100,17 +102,23 @@ int main(int argc, char** argv) {
                     std::cerr << "[SLAM] JPEG 디코딩 실패, 스킵" << std::endl;
                     continue;
                 }
+             
+                static double last_valid_timestamp = 0.0;
+                double timestamp = 0.0;
 
-                double timestamp = imu_points.empty()
-                    ? static_cast<double>(
-                          std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::system_clock::now().time_since_epoch()).count()) / 1000.0
-                    : imu_points.back().t;
+                if (!imu_points.empty()) {
+                    timestamp = imu_points.back().t;
+                    last_valid_timestamp = timestamp;
+                } else {
+                    // 플러터가 IMU를 안 보냈을 때 2026년 현재 시간으로 튀는 것을 방지
+                    timestamp = last_valid_timestamp + 0.033;
+                    last_valid_timestamp = timestamp;
+                }
 
                 // 순수 Monocular
-                SLAM.TrackMonocular(img, timestamp);
+                // SLAM.TrackMonocular(img, timestamp);
                 // IMU 사용 시 아래로 교체:
-                // SLAM.TrackMonocular(img, timestamp, imu_points);
+                SLAM.TrackMonocular(img, timestamp, imu_points);
             }
             continue;
 
