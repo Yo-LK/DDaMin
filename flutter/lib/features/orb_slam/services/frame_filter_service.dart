@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-const double kBlurThreshold = 300.0;
-const double kSimilarityThreshold = 0.98;
+const double kBlurThreshold = 1.0;
+const double kSimilarityThreshold = 0.9999;
 const int kDownWidth = 320;
 const int kDownHeight = 240;
 

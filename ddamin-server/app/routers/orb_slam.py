@@ -28,6 +28,8 @@ async def orb_slam_ws(websocket: WebSocket):
         writer = csv.writer(f)
         writer.writerow(["frame_number", "timestamp_ms", "ax", "ay", "az", "gx", "gy", "gz"])
 
+    global _fifo_fd
+    
     try:
         while True:
             data = await websocket.receive_bytes()
@@ -35,7 +37,6 @@ async def orb_slam_ws(websocket: WebSocket):
             if len(data) < 6:
                 continue
 
-            # ⭕ 플러터와 완벽하게 일치하는 6바이트 헤더 파싱
             frame_number = struct.unpack_from('<I', data, 0)[0]
             imu_count    = struct.unpack_from('<H', data, 4)[0]
 
@@ -45,7 +46,6 @@ async def orb_slam_ws(websocket: WebSocket):
             if len(data) < imu_end:
                 continue
 
-            imu_points = []
             rows = []
             for i in range(imu_count):
                 offset = 6 + i * _IMU_ENTRY_SIZE
@@ -58,31 +58,45 @@ async def orb_slam_ws(websocket: WebSocket):
 
             frame = data[imu_end:] 
 
-            # C++ FIFO 파이프 연결 및 전송 로직
-            global _fifo_fd
+            # C++ FIFO 파이프 연결 및 전송
             if _fifo_fd is None:
                 try:
                     _fifo_fd = os.open(FIFO_PATH, os.O_WRONLY)
                     print("[SLAM] C++ ORB-SLAM3 FIFO 파이프 연결 성공!")
                 except Exception:
-                    pass # C++이 켜질 때까지 패스
+                    pass
 
             if _fifo_fd is not None:
-                fifo_header = struct.pack('<IH', len(frame), imu_count)
-                raw_imu_bytes = data[6:imu_end]
-                
-                payload = fifo_header + raw_imu_bytes + frame
-                
-                bytes_written = 0
-                while bytes_written < len(payload):
-                    w = os.write(_fifo_fd, payload[bytes_written:])
-                    if w == 0:
-                        break
-                    bytes_written += w
+                try:
+                    fifo_header = struct.pack('<IH', len(frame), imu_count)
+                    raw_imu_bytes = data[6:imu_end]
+                    payload = fifo_header + raw_imu_bytes + frame
+                    
+                    bytes_written = 0
+                    while bytes_written < len(payload):
+                        w = os.write(_fifo_fd, payload[bytes_written:])
+                        if w == 0:
+                            break
+                        bytes_written += w
+                except BrokenPipeError:
+                    print("[SLAM] C++ 프로그램이 종료되어 파이프가 끊겼습니다.")
+                    os.close(_fifo_fd)
+                    _fifo_fd = None
 
             await websocket.send_bytes(frame)
 
     except WebSocketDisconnect:
-        pass
-
+        print("[SLAM] 플러터 앱과의 웹소켓 연결이 종료되었습니다.")
+    except Exception as e:
+        print(f"[SLAM] 서버 에러 발생: {e}")
+    finally:
+        # 🔥 핵심: 앱이 끊어지거나 에러가 나면 무조건 파이프를 닫아줍니다!
+        # 이렇게 해야 C++이 무한 대기에 빠지지 않고 안전하게 리셋됩니다.
+        if _fifo_fd is not None:
+            try:
+                os.close(_fifo_fd)
+            except:
+                pass
+            _fifo_fd = None
+            print("[SLAM] FIFO 파이프를 안전하게 닫았습니다.")
 

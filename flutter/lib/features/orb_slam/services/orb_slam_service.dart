@@ -49,9 +49,10 @@ class OrbSlamService {
   final List<_FrameEntry> _frameQueue = [];
   Timer? _sendTimer;
   Uint8List? _lastSentGray;
+  DateTime? _streamingStartTime;
 
   static const int _maxQueueSize = 15;
-  static const int _sendIntervalMs = 100;
+  static const int _sendIntervalMs = 66;
 
   Stream<dynamic>? get resultStream => _channel?.stream;
 
@@ -72,7 +73,7 @@ class OrbSlamService {
     ).listen(
       (e) {
         _imuBuffer.add(_ImuSample(
-          timestampMs: DateTime.now().millisecondsSinceEpoch.toDouble(),
+          timestampMs: DateTime.now().microsecondsSinceEpoch / 1000.0,
           ax: e.x, ay: e.y, az: e.z,
           gx: _gx, gy: _gy, gz: _gz,
         ));
@@ -94,6 +95,7 @@ class OrbSlamService {
     _isStreaming = true;
     _lastSentGray = null;
     _frameQueue.clear();
+    _streamingStartTime = DateTime.now();
     _startImu();
     _sendTimer = Timer.periodic(
       const Duration(milliseconds: _sendIntervalMs),
@@ -161,11 +163,16 @@ class OrbSlamService {
 
     if (buffer.isEmpty) return;
 
+    final bool isInitializing = 
+        DateTime.now().difference(_streamingStartTime!).inSeconds < 15;
+
     // Step 1: 라플라시안 분산 → 블러 임계값 미달 제거
     final candidates = <({_FrameEntry entry, double score})>[];
     for (final entry in buffer) {
       final score = FrameFilterService.laplacianVariance(entry.grayBytes);
-      if (score >= kBlurThreshold) {
+
+      final threshold = isInitializing ? 0.0 : kBlurThreshold;
+      if (score >= threshold) {
         candidates.add((entry: entry, score: score));
       }
     }
@@ -180,7 +187,7 @@ class OrbSlamService {
     final best = candidates.first;
 
     // Step 3: 이전 전송 프레임과 히스토그램 유사도 비교
-    if (_lastSentGray != null) {
+    if (!isInitializing && _lastSentGray != null) {
       final sim = FrameFilterService.histogramSimilarity(
           best.entry.grayBytes, _lastSentGray!);
       if (sim >= kSimilarityThreshold) {
@@ -197,7 +204,9 @@ class OrbSlamService {
     if (jpeg != null) {
       // ⭕ 타임스탬프 파라미터 삭제, jpeg만 보냅니다.
       _channel?.sink.add(_buildPayload(jpeg: jpeg));
-      print('[Filter] 전송 #$_frameNumber | '
+
+      final modeTag = isInitializing ? "[Init Mode]" : "[Filter]";
+      print('$modeTag 전송 #$_frameNumber | '
           'score=${best.score.toStringAsFixed(1)} | '
           '통과 ${candidates.length}/${buffer.length}장');
     }
@@ -251,7 +260,7 @@ class OrbSlamService {
         numChannels: 4,
         order: img.ChannelOrder.rgba,
       );
-      return img.encodeJpg(imgFrame, quality: 70);
+      return img.encodeJpg(imgFrame, quality: 50);
     } catch (e, st) {
       print('[CAM] convert error: $e\n$st');
       return null;
