@@ -16,14 +16,11 @@ _fifo_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 _fifo_write_future = None
 
 
-def _write_nonblocking_or_drop(fd, data):
-    try:
-        os.write(fd, data)  # PIPE_BUF(64KB) 이하면 원자적
-    except OSError as e:
-        if e.errno == errno.EAGAIN:
-            print("[FIFO] 버퍼 꽉참, 프레임 드롭")
-        else:
-            raise
+def _write_all_sync(fd, data):
+    total = 0
+    while total < len(data):
+        n = os.write(fd, data[total:])
+        total += n
 
 
 app = FastAPI()
@@ -35,6 +32,10 @@ async def open_fifo():
     global _fifo_fd
     try:
         _fifo_fd = os.open(FIFO_PATH, os.O_WRONLY | os.O_NONBLOCK)
+        flags = fcntl.fcntl(_fifo_fd, fcntl.F_GETFL)
+        is_nonblocking = bool(flags & os.O_NONBLOCK)
+        print(f"[FIFO] blocking={not is_nonblocking}")
+        fcntl.fcntl(_fifo_fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
         print("[SLAM] FIFO 연결됨 (startup)")
     except OSError:
         _fifo_fd = -1
@@ -78,7 +79,7 @@ def merge_video(filename: str, total_chunks: int):
             chunk_path = os.path.join(UPLOAD_DIR, chunk)
             with open(chunk_path, "rb") as f:
                 outfile.write(f.read())
-         
+          
 
     print(f"[{filename}] 병합 완료! 최종 파일: {output_path}")
 
@@ -93,16 +94,16 @@ async def upload_chunk(
     is_list: str = Form(None),
 ):
     """청크를 수신하고, 모두 모이면 백그라운드로 병합을 지시하는 엔드포인트"""
-   
+    
     # 청크 저장 (예: 0_video.mp4, 1_video.mp4)
     save_path = os.path.join(UPLOAD_DIR, f"{chunk_index}_{filename}")
-   
+    
     with open(save_path, "wb") as f:
         f.write(await file.read())
 
     # 현재까지 저장된 해당 파일의 청크 개수 확인
     saved_chunks = [f for f in os.listdir(UPLOAD_DIR) if f.endswith(f"_{filename}")]
-   
+    
     # 모든 청크가 다 들어왔다면 병합 트리거!
     if len(saved_chunks) == total_chunks:
         # 응답 지연을 막기 위해 BackgroundTasks로 넘김
@@ -174,12 +175,13 @@ async def websocket_orb_slam(websocket: WebSocket):
                 f.write(jpeg)
 
             global _fifo_write_future
-            
+          
             if _fifo_fd >= 0:
                 fifo_payload = struct.pack('<IH', len(jpeg), imu_count) + data[6:imu_end] + jpeg
+                print(f"[FIFO DEBUG] 전송: jpeg={len(jpeg)}B, payload={len(fifo_payload)}B")
                 if _fifo_write_future is None or _fifo_write_future.done():
                     _fifo_write_future = asyncio.get_event_loop().run_in_executor(
-                        _fifo_executor, _write_nonblocking_or_drop, _fifo_fd, fifo_payload
+                        _fifo_executor, _write_all_sync, _fifo_fd, fifo_payload
                     )
                 else:
                     print("[FIFO] 이전 쓰기 중, 프레임 스킵")

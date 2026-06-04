@@ -33,15 +33,15 @@ int main(int argc, char** argv) {
     system("mkdir -p /app/slam_output");
 
     // 테스트: 순수 Monocular
-    // ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, true);
+    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::MONOCULAR, true);
     // IMU 사용 시 아래로 교체:
-    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::IMU_MONOCULAR, true);
-   
+    // ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::IMU_MONOCULAR, true);
+    
     g_SLAM = &SLAM;
     signal(SIGINT, [](int) {
         if (g_SLAM) {
             g_SLAM->SaveKeyFrameTrajectoryTUM("/app/slam_output/KeyFrameTrajectory.txt");
-            g_SLAM->SaveMapPoints("/app/slam_output/MapPoints.txt");
+            g_SLAM->SaveMapPoints("/app/slam_output/MapPoints.txt"); 
             g_SLAM->Shutdown();
         }
         exit(0);
@@ -55,15 +55,15 @@ int main(int argc, char** argv) {
             sleep(1);
             continue;
         }
-     
-        {
-            int flags = fcntl(fd, F_GETFL);
-            fcntl(fd, F_SETFL, flags | O_NONBLOCK); uint8_t drain_buf[4096];
-            while (read(fd,drain_buf, sizeof(drain_buf)) > 0);
-            fcntl(fd, F_SETFL, flags); // blocking 복원
-            std::cout << "[SLAM] 잔류 버퍼 제거 완료" << std::endl;
-        }
- 
+      
+        { 
+            int flags = fcntl(fd, F_GETFL); 
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK); uint8_t drain_buf[4096]; 
+            while (read(fd,drain_buf, sizeof(drain_buf)) > 0); 
+            fcntl(fd, F_SETFL, flags); // blocking 복원 
+            std::cout << "[SLAM] 잔류 버퍼 제거 완료" << std::endl; 
+        } 
+  
         std::cout << "[SLAM] FIFO 연결됨, 프레임 수신 대기 중..." << std::endl;
 
         while (true) {
@@ -72,9 +72,18 @@ int main(int argc, char** argv) {
 
             if (!read_exact(fd, (uint8_t*)&jpeg_size, 4)) break;
             if (!read_exact(fd, (uint8_t*)&imu_count,  2)) break;
+            std::cout << "[SLAM DEBUG] 수신: jpeg_size=" << jpeg_size 
+                      << " imu_count=" << imu_count << std::endl;
 
+            if (jpeg_size > 5*1024*1024 || imu_count > 500) {
+                std::cerr << "[SLAM] 패킷 손상 감지 (jpeg=" << jpeg_size 
+                          << "), 재연결" << std::endl;
+                break;
+            }
             // IMU 파싱 (MONOCULAR 테스트 중에도 데이터는 읽어서 버퍼 소진)
             std::vector<ORB_SLAM3::IMU::Point> imu_points;
+            static double last_imu_t = 0.0;
+          
             for (int i = 0; i < imu_count; i++) {
                 uint8_t entry[32];
                 if (!read_exact(fd, entry, 32)) goto next_session;
@@ -88,7 +97,15 @@ int main(int argc, char** argv) {
                 memcpy(&gx,    entry + 20, 4);
                 memcpy(&gy,    entry + 24, 4);
                 memcpy(&gz,    entry + 28, 4);
-                imu_points.emplace_back(ax, ay, az, gx, gy, gz, ts_ms / 1000.0);
+
+                double t_sec = ts_ms / 1000.0;
+
+                if (t_sec <= last_imu_t) {
+                    t_sec = last_imu_t + 0.001;
+                }
+                last_imu_t = t_sec;
+              
+                imu_points.emplace_back(ax, ay, az, gx, gy, gz, t_sec);
             }
 
             {
@@ -99,10 +116,10 @@ int main(int argc, char** argv) {
                 // JPEG 디코딩
                 cv::Mat img = cv::imdecode(jpeg_buf, cv::IMREAD_GRAYSCALE);
                 if (img.empty()) {
-                    std::cerr << "[SLAM] JPEG 디코딩 실패, 스킵" << std::endl;
-                    continue;
+                    std::cerr << "[SLAM] JPEG 디코딩 실패, FIFO 재연결" << std::endl;
+                    break;
                 }
-             
+              
                 static double last_valid_timestamp = 0.0;
                 double timestamp = 0.0;
 
@@ -116,9 +133,9 @@ int main(int argc, char** argv) {
                 }
 
                 // 순수 Monocular
-                // SLAM.TrackMonocular(img, timestamp);
+                SLAM.TrackMonocular(img, timestamp);
                 // IMU 사용 시 아래로 교체:
-                SLAM.TrackMonocular(img, timestamp, imu_points);
+                // SLAM.TrackMonocular(img, timestamp, imu_points);
             }
             continue;
 

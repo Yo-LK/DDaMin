@@ -61,7 +61,7 @@ async def orb_slam_ws(websocket: WebSocket):
             # C++ FIFO 파이프 연결 및 전송
             if _fifo_fd is None:
                 try:
-                    _fifo_fd = os.open(FIFO_PATH, os.O_WRONLY)
+                    _fifo_fd = os.open(FIFO_PATH, os.O_WRONLY | os.O_NONBLOCK)
                     print("[SLAM] C++ ORB-SLAM3 FIFO 파이프 연결 성공!")
                 except Exception:
                     pass
@@ -74,10 +74,15 @@ async def orb_slam_ws(websocket: WebSocket):
                     
                     bytes_written = 0
                     while bytes_written < len(payload):
-                        w = os.write(_fifo_fd, payload[bytes_written:])
-                        if w == 0:
+                        try:
+                            w = os.write(_fifo_fd, payload[bytes_written:])
+                            if w <= 0:
+                                _fifo_fd = None
+                                break
+                            bytes_written += w
+                        except OSError:
+                            _fifo_fd = None
                             break
-                        bytes_written += w
                 except BrokenPipeError:
                     print("[SLAM] C++ 프로그램이 종료되어 파이프가 끊겼습니다.")
                     os.close(_fifo_fd)
